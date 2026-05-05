@@ -29,7 +29,7 @@ It speaks the Mixer Engine's internal IPC protocol over TCP on `127.0.0.1:4710`.
 
 ### Option A — Download (no Xcode required)
 
-1. Go to [**Releases**](https://github.com/kalskiid/ApolloController/releases/latest)
+1. Go to [**Releases**](https://github.com/kalskiid/ua-commander/releases/latest)
 2. Download the zip for your Mac — `arm64` for Apple Silicon (M1 and later), `x86_64` for Intel
 3. Unzip and run:
 
@@ -42,8 +42,8 @@ It speaks the Mixer Engine's internal IPC protocol over TCP on `127.0.0.1:4710`.
 Requires Xcode Command Line Tools (`xcode-select --install`).
 
 ```bash
-git clone https://github.com/kalskiid/ApolloController.git
-cd ApolloController
+git clone https://github.com/kalskiid/ua-commander.git
+cd ua-commander
 ./install.sh
 ```
 
@@ -99,7 +99,7 @@ Key paths used:
 ## Logs
 
 ```
-~/Library/Logs/ApolloController.log
+~/Library/Logs/ua-commander.log
 ```
 
 Or open it directly from the menu → **Open Log File**.

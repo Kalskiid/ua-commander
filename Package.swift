@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "ApolloController",
+    name: "ua-commander",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "ApolloController",
-            path: "Sources/ApolloController",
+            name: "ua-commander",
+            path: "Sources/ua-commander",
             resources: [.process("Resources")],
             linkerSettings: [
                 .linkedFramework("AppKit"),

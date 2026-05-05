@@ -35,7 +35,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         ua.connect()
         updateStatus()
-        writeLog("[Apollo Controller] Running — using direct UA Mixer Engine TCP control on :4710")
+        writeLog("[UA Commander] Running — using direct UA Mixer Engine TCP control on :4710")
     }
 
     // MARK: - Icons
@@ -59,7 +59,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Apollo Twin Volume Controller", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "UA Commander", action: nil, keyEquivalent: ""))
 
         sliderMenuItem = NSMenuItem()
         sliderMenuItem.view = makeSliderView()
@@ -172,7 +172,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openLog() {
-        let path = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Logs/ApolloController.log")
+        let path = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Logs/ua-commander.log")
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
 

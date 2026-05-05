@@ -2,8 +2,8 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-APP_NAME="ApolloController"
-PLIST_NAME="com.kalskiid.apollocontroller"
+APP_NAME="ua-commander"
+PLIST_NAME="com.kalskiid.uacommander"
 PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
 
 echo "=== UA Commander Installer ==="
@@ -32,8 +32,8 @@ cat > "$PLIST_PATH" <<PLIST
     <key>ProgramArguments</key><array><string>$BIN_PATH</string></array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
-    <key>StandardOutPath</key><string>$HOME/Library/Logs/ApolloController.log</string>
-    <key>StandardErrorPath</key><string>$HOME/Library/Logs/ApolloController.log</string>
+    <key>StandardOutPath</key><string>$HOME/Library/Logs/ua-commander.log</string>
+    <key>StandardErrorPath</key><string>$HOME/Library/Logs/ua-commander.log</string>
 </dict>
 </plist>
 PLIST
@@ -50,8 +50,8 @@ if pgrep -q "$APP_NAME"; then
     echo "  ⌘⌥D   Dim toggle"
     echo
     echo "All shortcuts are configurable — open the menu bar icon → Shortcuts…"
-    echo "Log: $HOME/Library/Logs/ApolloController.log"
+    echo "Log: $HOME/Library/Logs/ua-commander.log"
 else
-    echo "❌ Failed to start. Check log: $HOME/Library/Logs/ApolloController.log"
+    echo "❌ Failed to start. Check log: $HOME/Library/Logs/ua-commander.log"
     exit 1
 fi

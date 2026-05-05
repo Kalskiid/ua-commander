@@ -14,7 +14,7 @@ final class SettingsWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        panel.title = "Apollo Controller — Shortcuts"
+        panel.title = "UA Commander — Shortcuts"
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.level = .floating

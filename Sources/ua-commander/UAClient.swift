@@ -17,7 +17,7 @@ final class UAClient {
     private let port: NWEndpoint.Port = 4710
 
     private var connection: NWConnection?
-    private let queue = DispatchQueue(label: "com.user.apollocontroller.ua")
+    private let queue = DispatchQueue(label: "com.kalskiid.ua-commander.ua")
     private var funcId: Int = 1000
     private var rxBuffer = Data()
 

@@ -1,6 +1,6 @@
 import Foundation
 
-private let logPath = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Logs/ApolloController.log")
+private let logPath = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Logs/ua-commander.log")
 private let logFile: FileHandle? = {
     FileManager.default.createFile(atPath: logPath, contents: nil)
     return FileHandle(forWritingAtPath: logPath)

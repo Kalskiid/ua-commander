@@ -24,7 +24,7 @@ jobs:
       - name: Package
         run: |
           mkdir dist
-          cp .build/release/ApolloController dist/
+          cp .build/release/ua-commander dist/
           cp install.sh uninstall.sh dist/
           cd dist && zip -r \
             ../ua-commander-${{ github.ref_name }}-${{ matrix.arch }}.zip .
