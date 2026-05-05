@@ -1,0 +1,16 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Design / brand reference files
+brand-guidelines.html
+*.svg
+
+# macOS
+.DS_Store
+*.dSYM
+
+# Xcode
+xcuserdata/
+*.xcworkspace
+DerivedData/

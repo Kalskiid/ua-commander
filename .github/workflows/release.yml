@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+          - os: macos-13
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release binary
+        run: swift build -c release
+
+      - name: Package
+        run: |
+          mkdir dist
+          cp .build/release/ApolloController dist/
+          cp install.sh uninstall.sh dist/
+          cd dist && zip -r \
+            ../ua-commander-${{ github.ref_name }}-${{ matrix.arch }}.zip .
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ua-commander-*.zip
+          generate_release_notes: true
