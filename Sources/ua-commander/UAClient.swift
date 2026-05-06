@@ -22,12 +22,17 @@ final class UAClient {
     private var rxBuffer = Data()
     private var heartbeat: DispatchSourceTimer?
 
+    // Incremented on every reconnect so callbacks from old connections are ignored.
+    private var generation: Int = 0
+
     // Current cached state
     private(set) var monitorLevel: Double = 0.5  // tapered 0..1
     private(set) var isMuted: Bool = false
     private(set) var isDim: Bool = false
     private(set) var isConnected: Bool = false
-    // True only when the hardware device is actually present (separate from TCP connectivity)
+    // True only when the Apollo hardware is physically present. Driven by the
+    // engine's /devices/0/DeviceOnline property — distinct from TCP connectivity:
+    // the Mixer Engine keeps the socket open even when the device is unplugged.
     private(set) var isDevicePresent: Bool = false
 
     var onStateChanged: (() -> Void)?
@@ -44,13 +49,15 @@ final class UAClient {
     func connect() {
         let conn = NWConnection(host: host, port: port, using: .tcp)
         connection = conn
+        let gen = generation
         conn.stateUpdateHandler = { [weak self] state in
-            guard let self = self else { return }
+            guard let self, self.generation == gen else { return }
             switch state {
             case .ready:
                 writeLog("[UA] Connected to UA Mixer Engine on \(self.host):\(self.port)")
                 self.isConnected = true
-                self.startReceive()
+                self.onStateChanged?()
+                self.startReceive(gen: gen)
                 self.fetchInitialState()
                 self.startHeartbeat()
             case .failed(let err):
@@ -62,9 +69,6 @@ final class UAClient {
                 self.queue.asyncAfter(deadline: .now() + 3) { [weak self] in self?.reconnect() }
             case .cancelled:
                 writeLog("[UA] Connection cancelled")
-                self.isConnected = false
-                self.isDevicePresent = false
-                self.stopHeartbeat()
             default:
                 break
             }
@@ -73,14 +77,16 @@ final class UAClient {
     }
 
     private func reconnect() {
+        generation += 1
         connection?.cancel()
         connection = nil
+        rxBuffer.removeAll()
         connect()
     }
 
-    private func startReceive() {
+    private func startReceive(gen: Int) {
         connection?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
-            guard let self = self else { return }
+            guard let self, self.generation == gen else { return }
             if let data = data, !data.isEmpty {
                 self.rxBuffer.append(data)
                 self.parseFrames()
@@ -94,7 +100,7 @@ final class UAClient {
                 self.queue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.reconnect() }
                 return
             }
-            self.startReceive()
+            self.startReceive(gen: gen)
         }
     }
 
@@ -115,10 +121,6 @@ final class UAClient {
 
         if let err = obj["error"] as? String {
             writeLog("[UA] Server error: \(err) on \(obj["path"] ?? "?")")
-            if isDevicePresent {
-                isDevicePresent = false
-                onStateChanged?()
-            }
             return
         }
 
@@ -132,6 +134,20 @@ final class UAClient {
             if let b = value as? Bool { isMuted = b; onStateChanged?() }
         case "/devices/0/outputs/\(outputIndex)/DimOn/value":
             if let b = value as? Bool { isDim = b; onStateChanged?() }
+        case "/devices/0/DeviceOnline/value":
+            // Pushed by the engine on every physical connect/disconnect.
+            if let b = value as? Bool { setDevicePresent(b) }
+        case "/devices/0/DeviceOnline":
+            // Initial GET response — value may be nested depending on engine version.
+            if let dict = value as? [String: Any] {
+                if let b = dict["value"] as? Bool {
+                    setDevicePresent(b)
+                } else if let b = ((dict["properties"] as? [String: Any])?["value"] as? [String: Any])?["value"] as? Bool {
+                    setDevicePresent(b)
+                }
+            } else if let b = value as? Bool {
+                setDevicePresent(b)
+            }
         case "/devices/0/outputs/\(outputIndex)":
             // Full state object (response to initial GET and heartbeat pings)
             if let outer = value as? [String: Any],
@@ -145,12 +161,18 @@ final class UAClient {
                 if let d = (props["DimOn"] as? [String: Any])?["value"] as? Bool {
                     isDim = d
                 }
-                isDevicePresent = true
                 onStateChanged?()
             }
         default:
             break
         }
+    }
+
+    private func setDevicePresent(_ present: Bool) {
+        guard isDevicePresent != present else { return }
+        isDevicePresent = present
+        writeLog("[UA] Apollo \(present ? "online" : "offline")")
+        onStateChanged?()
     }
 
     // MARK: - Heartbeat
@@ -161,6 +183,9 @@ final class UAClient {
         timer.setEventHandler { [weak self] in
             guard let self, self.isConnected else { return }
             self.get("/devices/0/outputs/\(self.outputIndex)")
+            // Poll physical presence: the engine keeps the socket open when the
+            // Apollo is unplugged, so DeviceOnline is the only reliable signal.
+            self.get("/devices/0/DeviceOnline")
         }
         timer.resume()
         heartbeat = timer
@@ -215,6 +240,9 @@ final class UAClient {
         subscribe("CRMonitorLevelTapered")
         subscribe("Mute")
         subscribe("DimOn")
+        // Hardware presence: DeviceOnline is NOT subscribable on this engine, so
+        // seed it once here and re-poll it on every heartbeat (see startHeartbeat).
+        get("/devices/0/DeviceOnline")
     }
 
     /// Set monitor level 0.0..1.0 (tapered scale)
