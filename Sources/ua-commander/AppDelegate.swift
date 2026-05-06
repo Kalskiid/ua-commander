@@ -127,7 +127,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let pct = Int((ua.monitorLevel * 100).rounded())
 
         // Toolbar icon
-        if !ua.isConnected {
+        let working = ua.isConnected && ua.isDevicePresent
+        if !working {
             statusItem.button?.image = iconDisconnected
         } else if ua.isMuted || pct == 0 {
             statusItem.button?.image = iconMuted
@@ -137,11 +138,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.title = ""
 
         // Slider vs. disconnected message
-        sliderMenuItem.isHidden   = !ua.isConnected
-        disconnectedItem.isHidden = ua.isConnected
+        sliderMenuItem.isHidden   = !working
+        disconnectedItem.isHidden = working
 
         // Sync slider + label to current level
-        if ua.isConnected {
+        if working {
             volumeSlider.doubleValue = ua.monitorLevel
             volumeLabel.stringValue  = "\(pct)%"
         }

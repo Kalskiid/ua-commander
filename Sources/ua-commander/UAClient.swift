@@ -20,12 +20,15 @@ final class UAClient {
     private let queue = DispatchQueue(label: "com.kalskiid.ua-commander.ua")
     private var funcId: Int = 1000
     private var rxBuffer = Data()
+    private var heartbeat: DispatchSourceTimer?
 
     // Current cached state
     private(set) var monitorLevel: Double = 0.5  // tapered 0..1
     private(set) var isMuted: Bool = false
     private(set) var isDim: Bool = false
     private(set) var isConnected: Bool = false
+    // True only when the hardware device is actually present (separate from TCP connectivity)
+    private(set) var isDevicePresent: Bool = false
 
     var onStateChanged: (() -> Void)?
 
@@ -49,13 +52,19 @@ final class UAClient {
                 self.isConnected = true
                 self.startReceive()
                 self.fetchInitialState()
+                self.startHeartbeat()
             case .failed(let err):
                 writeLog("[UA] Connection failed: \(err) — retrying in 3s")
                 self.isConnected = false
+                self.isDevicePresent = false
+                self.stopHeartbeat()
+                self.onStateChanged?()
                 self.queue.asyncAfter(deadline: .now() + 3) { [weak self] in self?.reconnect() }
             case .cancelled:
                 writeLog("[UA] Connection cancelled")
                 self.isConnected = false
+                self.isDevicePresent = false
+                self.stopHeartbeat()
             default:
                 break
             }
@@ -106,6 +115,10 @@ final class UAClient {
 
         if let err = obj["error"] as? String {
             writeLog("[UA] Server error: \(err) on \(obj["path"] ?? "?")")
+            if isDevicePresent {
+                isDevicePresent = false
+                onStateChanged?()
+            }
             return
         }
 
@@ -120,7 +133,7 @@ final class UAClient {
         case "/devices/0/outputs/\(outputIndex)/DimOn/value":
             if let b = value as? Bool { isDim = b; onStateChanged?() }
         case "/devices/0/outputs/\(outputIndex)":
-            // Full state object (response to initial GET)
+            // Full state object (response to initial GET and heartbeat pings)
             if let outer = value as? [String: Any],
                let props = outer["properties"] as? [String: Any] {
                 if let lvl = (props["CRMonitorLevelTapered"] as? [String: Any])?["value"] as? Double {
@@ -132,11 +145,30 @@ final class UAClient {
                 if let d = (props["DimOn"] as? [String: Any])?["value"] as? Bool {
                     isDim = d
                 }
+                isDevicePresent = true
                 onStateChanged?()
             }
         default:
             break
         }
+    }
+
+    // MARK: - Heartbeat
+
+    private func startHeartbeat() {
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 5, repeating: 5)
+        timer.setEventHandler { [weak self] in
+            guard let self, self.isConnected else { return }
+            self.get("/devices/0/outputs/\(self.outputIndex)")
+        }
+        timer.resume()
+        heartbeat = timer
+    }
+
+    private func stopHeartbeat() {
+        heartbeat?.cancel()
+        heartbeat = nil
     }
 
     // MARK: - Sending
