@@ -126,8 +126,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateStatus() {
         let pct = Int((ua.monitorLevel * 100).rounded())
 
-        // Toolbar icon
+        // "Working" = engine reachable AND the Apollo hardware physically present.
         let working = ua.isConnected && ua.isDevicePresent
+
+        // Toolbar icon
         if !working {
             statusItem.button?.image = iconDisconnected
         } else if ua.isMuted || pct == 0 {
@@ -140,6 +142,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Slider vs. disconnected message
         sliderMenuItem.isHidden   = !working
         disconnectedItem.isHidden = working
+        disconnectedItem.title = ua.isConnected
+            ? "Apollo not connected"
+            : "Not connected to Mixer Engine"
 
         // Sync slider + label to current level
         if working {
