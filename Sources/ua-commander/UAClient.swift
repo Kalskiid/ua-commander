@@ -25,6 +25,9 @@ final class UAClient {
 
     // Incremented on every reconnect so callbacks from old connections are ignored.
     private var generation: Int = 0
+    // Guards against stacking multiple reconnect timers when .waiting/.failed
+    // fire repeatedly for the same dead connection.
+    private var reconnectPending = false
 
     // Current cached state
     private(set) var monitorLevel: Double = 0.5  // tapered 0..1
@@ -65,13 +68,26 @@ final class UAClient {
                 self.onStateChanged?()
                 self.startReceive(gen: gen)
                 self.startDiscovery()
+            case .waiting(let err):
+                // Nothing is listening on :4710 yet — typically UA Commander
+                // launched before the UAD/Mixer Engine at login. For a refused
+                // loopback port NWConnection parks here and does NOT retry on its
+                // own (its auto-retry waits for a path/viability change, but the
+                // loopback path never changes), so it would stay stuck forever.
+                // Drive the retry ourselves with a fresh connection instead.
+                writeLog("[UA] Connection waiting: \(err) — Mixer Engine not up yet, retrying in 3s")
+                self.isConnected = false
+                self.isDevicePresent = false
+                self.stopHeartbeat()
+                self.onStateChanged?()
+                self.scheduleReconnect(after: 3)
             case .failed(let err):
                 writeLog("[UA] Connection failed: \(err) — retrying in 3s")
                 self.isConnected = false
                 self.isDevicePresent = false
                 self.stopHeartbeat()
                 self.onStateChanged?()
-                self.queue.asyncAfter(deadline: .now() + 3) { [weak self] in self?.reconnect() }
+                self.scheduleReconnect(after: 3)
             case .cancelled:
                 writeLog("[UA] Connection cancelled")
             default:
@@ -83,6 +99,7 @@ final class UAClient {
 
     private func reconnect() {
         generation += 1
+        reconnectPending = false
         connection?.cancel()
         connection = nil
         rxBuffer.removeAll()
@@ -91,6 +108,15 @@ final class UAClient {
         pendingOutputs.removeAll()
         monitorOutputs.removeAll()
         connect()
+    }
+
+    // Schedules a single pending reconnect. Multiple .waiting/.failed/isComplete
+    // events for the same dead connection collapse into one timer so we don't
+    // churn through overlapping connect attempts.
+    private func scheduleReconnect(after seconds: Double) {
+        guard !reconnectPending else { return }
+        reconnectPending = true
+        queue.asyncAfter(deadline: .now() + seconds) { [weak self] in self?.reconnect() }
     }
 
     private func startReceive(gen: Int) {
@@ -106,7 +132,7 @@ final class UAClient {
             }
             if isComplete {
                 writeLog("[UA] Connection complete — will reconnect")
-                self.queue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.reconnect() }
+                self.scheduleReconnect(after: 1)
                 return
             }
             self.startReceive(gen: gen)
