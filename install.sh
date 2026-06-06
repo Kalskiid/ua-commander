@@ -1,57 +1,32 @@
 #!/bin/bash
-set -e
+# Build UA Commander from source and install it to /Applications.
+#
+# Most users should grab the .dmg from Releases instead — this is the
+# build-from-source path and requires Xcode Command Line Tools.
+#
+# Launch-at-login is no longer configured here: open the menu-bar icon and
+# toggle "Launch at Login" whenever you want it.
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-APP_NAME="ua-commander"
-PLIST_NAME="com.kalskiid.uacommander"
-PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
+APP_NAME="UA Commander"
+DEST="/Applications/$APP_NAME.app"
 
 echo "=== UA Commander Installer ==="
 
-# Use a pre-built binary if one is sitting next to this script (downloaded release).
-# Otherwise build from source — requires Xcode Command Line Tools.
-if [ -f "$SCRIPT_DIR/$APP_NAME" ]; then
-    BIN_PATH="$SCRIPT_DIR/$APP_NAME"
-    echo "Using pre-built binary."
-else
-    BIN_PATH="$SCRIPT_DIR/.build/release/$APP_NAME"
-    echo "Building from source (this may take a minute)..."
-    cd "$SCRIPT_DIR"
-    swift build -c release
-fi
+# Build into a temp dir so no stray .app is left in the repo for Launchpad to
+# index alongside the installed one.
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+OUT_DIR="$WORK" "$SCRIPT_DIR/scripts/build-app.sh"
 
-launchctl bootout "gui/$(id -u)/$PLIST_NAME" 2>/dev/null || true
-launchctl unload "$PLIST_PATH" 2>/dev/null || true
+# Replace any previous copy and run the fresh one.
+pkill -f "ua-commander" 2>/dev/null || true
+rm -rf "$DEST"
+cp -R "$WORK/$APP_NAME.app" "$DEST"
+open "$DEST"
 
-cat > "$PLIST_PATH" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key><string>$PLIST_NAME</string>
-    <key>ProgramArguments</key><array><string>$BIN_PATH</string></array>
-    <key>RunAtLoad</key><true/>
-    <key>KeepAlive</key><true/>
-    <key>StandardOutPath</key><string>$HOME/Library/Logs/ua-commander.log</string>
-    <key>StandardErrorPath</key><string>$HOME/Library/Logs/ua-commander.log</string>
-</dict>
-</plist>
-PLIST
-
-launchctl load "$PLIST_PATH"
-sleep 1
-if pgrep -q "$APP_NAME"; then
-    echo "✅ UA Commander is running"
-    echo
-    echo "Default keyboard shortcuts:"
-    echo "  ⌘⌥↑   Volume Up   (+5%)"
-    echo "  ⌘⌥↓   Volume Down (-5%)"
-    echo "  ⌘⌥M   Mute toggle"
-    echo "  ⌘⌥D   Dim toggle"
-    echo
-    echo "All shortcuts are configurable — open the menu bar icon → Shortcuts…"
-    echo "Log: $HOME/Library/Logs/ua-commander.log"
-else
-    echo "❌ Failed to start. Check log: $HOME/Library/Logs/ua-commander.log"
-    exit 1
-fi
+echo
+echo "✅ Installed to $DEST and launched."
+echo "   Menu-bar icon → Launch at Login to start it automatically."
+echo "   Log: $HOME/Library/Logs/ua-commander.log"
