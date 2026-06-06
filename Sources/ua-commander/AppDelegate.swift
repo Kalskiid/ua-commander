@@ -3,7 +3,7 @@ import Foundation
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
-    private let ua     = UAClient(outputIndex: 4)
+    private let ua     = UAClient()
     private let hotkey = HotkeyManager()
     private var config = ShortcutConfig.load()
     private var settingsWC: SettingsWindowController?
