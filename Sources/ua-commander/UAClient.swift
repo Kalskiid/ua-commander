@@ -7,11 +7,12 @@ import Network
 //   server -> client: '{"path":"...","parameters":{...},"data":...}\0' (JSON, null-terminated)
 //   verbs observed: get, set, sub (subscribe), unsub
 //
-// Key paths for Apollo Twin X:
-//   /devices/0/outputs/4/CRMonitorLevelTapered/value   float 0.0..1.0  (monitor level)
-//   /devices/0/outputs/4/CRMonitorLevel/value          float -96..0 dB (read-only mirror)
-//   /devices/0/outputs/4/Mute/value                    bool             (monitor mute)
-//   /devices/0/outputs/4/DimOn/value                   bool             (dim toggle)
+// Device and output indices are NOT hardcoded — they are discovered at connect
+// time (see startDiscovery). The monitor output sits at different indices across
+// Apollo models, so it is identified by role: the output whose IOType == "Monitor"
+// and that carries a CRMonitorLevelTapered property. This is verified on the
+// Apollo Twin X (output 4) and expected to generalize across the Apollo range,
+// but has not yet been confirmed on non-Twin hardware (x6/x8/x16/etc.).
 final class UAClient {
     private let host = NWEndpoint.Host("127.0.0.1")
     private let port: NWEndpoint.Port = 4710
@@ -30,19 +31,24 @@ final class UAClient {
     private(set) var isMuted: Bool = false
     private(set) var isDim: Bool = false
     private(set) var isConnected: Bool = false
-    // True only when the Apollo hardware is physically present. Driven by the
-    // engine's /devices/0/DeviceOnline property — distinct from TCP connectivity:
-    // the Mixer Engine keeps the socket open even when the device is unplugged.
+    // True only when the Apollo hardware is physically present, reported by the
+    // engine's DeviceOnline property — distinct from TCP connectivity: the Mixer
+    // Engine keeps the socket open even when the device is unplugged.
     private(set) var isDevicePresent: Bool = false
 
     var onStateChanged: (() -> Void)?
 
-    // Output index to control. Apollo Twin X has the MONITOR on output 4 by default.
-    private let outputIndex: Int
+    // Discovered at connect time. deviceId defaults to the first device found;
+    // outputIndex stays nil until the monitor output is located, and normal
+    // operation (subscriptions + heartbeat) only begins once it is set.
+    private var deviceId: Int = 0
+    private var outputIndex: Int?
 
-    init(outputIndex: Int = 4) {
-        self.outputIndex = outputIndex
-    }
+    // Discovery scratch: output ids still to probe, and the monitor-role outputs found.
+    private var pendingOutputs: [Int] = []
+    private var monitorOutputs: [Int] = []
+
+    init() {}
 
     // MARK: - Connection lifecycle
 
@@ -58,8 +64,7 @@ final class UAClient {
                 self.isConnected = true
                 self.onStateChanged?()
                 self.startReceive(gen: gen)
-                self.fetchInitialState()
-                self.startHeartbeat()
+                self.startDiscovery()
             case .failed(let err):
                 writeLog("[UA] Connection failed: \(err) — retrying in 3s")
                 self.isConnected = false
@@ -81,6 +86,10 @@ final class UAClient {
         connection?.cancel()
         connection = nil
         rxBuffer.removeAll()
+        // Re-discover from scratch — the device set may have changed.
+        outputIndex = nil
+        pendingOutputs.removeAll()
+        monitorOutputs.removeAll()
         connect()
     }
 
@@ -119,26 +128,34 @@ final class UAClient {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
 
-        if let err = obj["error"] as? String {
-            writeLog("[UA] Server error: \(err) on \(obj["path"] ?? "?")")
+        let path = obj["path"] as? String
+
+        // Until the monitor output is known, every response is discovery traffic.
+        guard let outputIndex else {
+            handleDiscoveryMessage(path: path, obj: obj)
             return
         }
 
-        guard let path = obj["path"] as? String else { return }
+        if let err = obj["error"] as? String {
+            writeLog("[UA] Server error: \(err) on \(path ?? "?")")
+            return
+        }
+
+        guard let path else { return }
         let value = obj["data"]
 
         switch path {
-        case "/devices/0/outputs/\(outputIndex)/CRMonitorLevelTapered/value":
+        case "/devices/\(deviceId)/outputs/\(outputIndex)/CRMonitorLevelTapered/value":
             if let d = value as? Double { monitorLevel = d; onStateChanged?() }
-        case "/devices/0/outputs/\(outputIndex)/Mute/value":
+        case "/devices/\(deviceId)/outputs/\(outputIndex)/Mute/value":
             if let b = value as? Bool { isMuted = b; onStateChanged?() }
-        case "/devices/0/outputs/\(outputIndex)/DimOn/value":
+        case "/devices/\(deviceId)/outputs/\(outputIndex)/DimOn/value":
             if let b = value as? Bool { isDim = b; onStateChanged?() }
-        case "/devices/0/DeviceOnline/value":
-            // Pushed by the engine on every physical connect/disconnect.
+        case "/devices/\(deviceId)/DeviceOnline/value":
+            // Pushed shape (if the engine ever supports it); we currently poll.
             if let b = value as? Bool { setDevicePresent(b) }
-        case "/devices/0/DeviceOnline":
-            // Initial GET response — value may be nested depending on engine version.
+        case "/devices/\(deviceId)/DeviceOnline":
+            // Polled GET response: {"data":{"type":"bool","value":<bool>}}.
             if let dict = value as? [String: Any] {
                 if let b = dict["value"] as? Bool {
                     setDevicePresent(b)
@@ -148,7 +165,7 @@ final class UAClient {
             } else if let b = value as? Bool {
                 setDevicePresent(b)
             }
-        case "/devices/0/outputs/\(outputIndex)":
+        case "/devices/\(deviceId)/outputs/\(outputIndex)":
             // Full state object (response to initial GET and heartbeat pings)
             if let outer = value as? [String: Any],
                let props = outer["properties"] as? [String: Any] {
@@ -175,17 +192,117 @@ final class UAClient {
         onStateChanged?()
     }
 
+    // MARK: - Discovery
+    //
+    // Walks the device tree to locate the controllable monitor output without
+    // hardcoding indices:
+    //   1. get /devices                  -> device ids (pick the first)
+    //   2. get /devices/{id}/outputs     -> output ids
+    //   3. get /devices/{id}/outputs/{n} -> first with IOType == "Monitor"
+    //                                       carrying CRMonitorLevelTapered
+    // If anything is missing (no device / no monitor / device unplugged at launch)
+    // discovery retries on a timer, so plugging in later recovers automatically.
+
+    private func startDiscovery() {
+        outputIndex = nil
+        pendingOutputs.removeAll()
+        monitorOutputs.removeAll()
+        get("/devices")
+    }
+
+    private func handleDiscoveryMessage(path: String?, obj: [String: Any]) {
+        guard let path else { return }
+        let comps = path.split(separator: "/").map(String.init)  // e.g. ["devices","0","outputs","4"]
+        let isError = obj["error"] != nil
+        let data = obj["data"] as? [String: Any]
+
+        switch comps.count {
+        case 1 where comps[0] == "devices":
+            guard !isError, let children = data?["children"] as? [String: Any], !children.isEmpty else {
+                writeLog("[UA] Discovery: no UA devices present — retrying")
+                scheduleDiscoveryRetry()
+                return
+            }
+            let ids = children.keys.compactMap { Int($0) }.sorted()
+            if ids.count > 1 {
+                writeLog("[UA] Discovery: \(ids.count) devices present \(ids); using first (picker TBD)")
+            }
+            deviceId = ids[0]
+            get("/devices/\(deviceId)/outputs")
+
+        case 3 where comps[0] == "devices" && comps[2] == "outputs":
+            guard !isError, let children = data?["children"] as? [String: Any], !children.isEmpty else {
+                writeLog("[UA] Discovery: no outputs on device \(deviceId) — retrying")
+                scheduleDiscoveryRetry()
+                return
+            }
+            pendingOutputs = children.keys.compactMap { Int($0) }.sorted()
+            monitorOutputs.removeAll()
+            probeNextOutput()
+
+        case 4 where comps[0] == "devices" && comps[2] == "outputs":
+            // Collect every monitor-role output; selection happens once all are probed.
+            if !isError,
+               let props = data?["properties"] as? [String: Any],
+               (props["IOType"] as? [String: Any])?["value"] as? String == "Monitor",
+               props["CRMonitorLevelTapered"] != nil,
+               let n = Int(comps[3]) {
+                monitorOutputs.append(n)
+            }
+            probeNextOutput()
+
+        default:
+            break
+        }
+    }
+
+    private func probeNextOutput() {
+        if !pendingOutputs.isEmpty {
+            let n = pendingOutputs.removeFirst()
+            get("/devices/\(deviceId)/outputs/\(n)")
+            return
+        }
+        // Every output probed — choose the monitor bus.
+        guard let chosen = monitorOutputs.first else {
+            writeLog("[UA] Discovery: no monitor output found on device \(deviceId) — retrying")
+            scheduleDiscoveryRetry()
+            return
+        }
+        if monitorOutputs.count > 1 {
+            // Unconfirmed on multi-monitor models — surface it instead of guessing silently.
+            writeLog("[UA] Discovery: \(monitorOutputs.count) monitor outputs \(monitorOutputs); using first \(chosen) (picker TBD)")
+        }
+        finishDiscovery(outputIndex: chosen)
+    }
+
+    private func finishDiscovery(outputIndex n: Int) {
+        guard outputIndex == nil else { return }
+        outputIndex = n
+        writeLog("[UA] Discovery: monitor output = /devices/\(deviceId)/outputs/\(n)")
+        fetchInitialState()
+        startHeartbeat()
+    }
+
+    private func scheduleDiscoveryRetry() {
+        let gen = generation
+        queue.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self, self.generation == gen, self.isConnected, self.outputIndex == nil else { return }
+            self.startDiscovery()
+        }
+    }
+
     // MARK: - Heartbeat
 
     private func startHeartbeat() {
+        stopHeartbeat()
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 5, repeating: 5)
         timer.setEventHandler { [weak self] in
-            guard let self, self.isConnected else { return }
-            self.get("/devices/0/outputs/\(self.outputIndex)")
+            guard let self, self.isConnected, let outputIndex = self.outputIndex else { return }
+            self.get("/devices/\(self.deviceId)/outputs/\(outputIndex)")
             // Poll physical presence: the engine keeps the socket open when the
             // Apollo is unplugged, so DeviceOnline is the only reliable signal.
-            self.get("/devices/0/DeviceOnline")
+            self.get("/devices/\(self.deviceId)/DeviceOnline")
         }
         timer.resume()
         heartbeat = timer
@@ -212,20 +329,25 @@ final class UAClient {
 
     private func nextFuncId() -> Int { funcId += 1; return funcId }
 
-    private func outputPath(_ leaf: String) -> String {
-        return "/devices/0/outputs/\(outputIndex)/\(leaf)/value"
+    private func outputPath(_ leaf: String) -> String? {
+        guard let outputIndex else { return nil }
+        return "/devices/\(deviceId)/outputs/\(outputIndex)/\(leaf)/value"
     }
 
     private func setProp(_ leaf: String, valueLiteral: String) {
+        guard let path = outputPath(leaf) else {
+            writeLog("[UA] No monitor output discovered yet — drop set \(leaf)")
+            return
+        }
         let id = nextFuncId()
-        let cmd = "set \(outputPath(leaf))?context_type=main&func_id=\(id) \(valueLiteral)"
+        let cmd = "set \(path)?context_type=main&func_id=\(id) \(valueLiteral)"
         writeLog("[UA] -> \(cmd)")
         sendCommand(cmd)
     }
 
     private func subscribe(_ leaf: String) {
-        let cmd = "sub \(outputPath(leaf))"
-        sendCommand(cmd)
+        guard let path = outputPath(leaf) else { return }
+        sendCommand("sub \(path)")
     }
 
     private func get(_ path: String) {
@@ -235,14 +357,15 @@ final class UAClient {
     // MARK: - Public API
 
     private func fetchInitialState() {
-        get("/devices/0/outputs/\(outputIndex)")
+        guard let outputIndex else { return }
+        get("/devices/\(deviceId)/outputs/\(outputIndex)")
         // Subscribe so external changes (physical knob, UAD Console) update us
         subscribe("CRMonitorLevelTapered")
         subscribe("Mute")
         subscribe("DimOn")
         // Hardware presence: DeviceOnline is NOT subscribable on this engine, so
         // seed it once here and re-poll it on every heartbeat (see startHeartbeat).
-        get("/devices/0/DeviceOnline")
+        get("/devices/\(deviceId)/DeviceOnline")
     }
 
     /// Set monitor level 0.0..1.0 (tapered scale)
