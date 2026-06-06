@@ -27,15 +27,22 @@ It speaks the Mixer Engine's internal IPC protocol over TCP on `127.0.0.1:4710`.
 
 ## Install
 
-### Option A — Download (no Xcode required)
+### Option A — Download the app (no Xcode required)
 
 1. Go to [**Releases**](https://github.com/kalskiid/ua-commander/releases/latest)
-2. Download the zip for your Mac — `arm64` for Apple Silicon (M1 and later), `x86_64` for Intel
-3. Unzip and run:
+2. Download the `.dmg` for your Mac — `arm64` for Apple Silicon (M1 and later), `x86_64` for Intel
+3. Open the DMG and **drag UA Commander into Applications**
+4. Clear the download quarantine once (see below), then launch it — the menu bar icon appears within a few seconds
+
+Because this is a free, open-source build it isn't notarized by Apple, so a downloaded copy is quarantined. On Apple Silicon that shows up as a **"UA Commander is damaged / can't be opened"** warning (right-click → Open usually won't get past it). Clear the quarantine flag once, in Terminal:
 
 ```bash
-./install.sh
+xattr -dr com.apple.quarantine "/Applications/UA Commander.app"
 ```
+
+Then open the app normally. You only do this once. *(Notarization, which removes this step entirely, is planned for a future release.)*
+
+To start it automatically, open the menu bar icon → **Launch at Login**.
 
 ### Option B — Build from source
 
@@ -44,10 +51,10 @@ Requires Xcode Command Line Tools (`xcode-select --install`).
 ```bash
 git clone https://github.com/kalskiid/ua-commander.git
 cd ua-commander
-./install.sh
+./install.sh          # builds the .app and installs it to /Applications
 ```
 
-The installer registers a LaunchAgent so the app starts at login and launches it immediately. The menu bar icon appears within a few seconds.
+Prefer just the bundle without installing? Run `scripts/build-app.sh` and find `UA Commander.app` in `dist/`.
 
 ---
 
@@ -108,11 +115,10 @@ Or open it directly from the menu → **Open Log File**.
 
 ## Uninstall
 
-```bash
-./uninstall.sh
-```
+First turn off **Launch at Login** from the menu (or it stays registered), then:
 
-Stops the process, removes the LaunchAgent, leaves nothing else behind.
+- **App / DMG install:** quit it and drag **UA Commander** from Applications to the Trash.
+- **From source:** `./uninstall.sh` — removes the app, the login item, and any legacy LaunchAgent.
 
 ---
 

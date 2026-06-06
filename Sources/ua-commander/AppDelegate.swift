@@ -1,7 +1,8 @@
 import AppKit
 import Foundation
+import ServiceManagement
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let ua     = UAClient()
     private let hotkey = HotkeyManager()
@@ -22,10 +23,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuItemDim:      NSMenuItem!
     private var sliderMenuItem:   NSMenuItem!
     private var disconnectedItem: NSMenuItem!
+    private var launchAtLoginItem: NSMenuItem!
     private var volumeSlider:     NSSlider!
     private var volumeLabel:      NSTextField!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        migrateLegacyLaunchAgent()
         loadIcons()
         setupStatusItem()
         setupHotkeys()
@@ -47,7 +50,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func loadIcon(_ name: String) -> NSImage? {
-        guard let img = Bundle.module.image(forResource: name) else { return nil }
+        // In a packaged .app the icons live in Contents/Resources (Bundle.main).
+        // `Bundle.module` is only used as a fallback for `swift run` dev builds —
+        // and thanks to ?? short-circuiting it's never touched in the .app, which
+        // matters because Bundle.module fatalErrors if its bundle isn't found.
+        guard let img = Bundle.main.image(forResource: name)
+                     ?? Bundle.module.image(forResource: name) else { return nil }
         img.isTemplate = false
         img.size = NSSize(width: 18, height: 18)
         return img
@@ -59,6 +67,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         let menu = NSMenu()
+        menu.delegate = self
         menu.addItem(NSMenuItem(title: "UA Commander", action: nil, keyEquivalent: ""))
 
         sliderMenuItem = NSMenuItem()
@@ -84,10 +93,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(item("Shortcuts…",    action: #selector(openSettings)))
         menu.addItem(item("Open Log File", action: #selector(openLog)))
         menu.addItem(.separator())
+        launchAtLoginItem = item("Launch at Login", action: #selector(toggleLaunchAtLogin))
+        menu.addItem(launchAtLoginItem)
         menu.addItem(item("Quit", action: #selector(quit)))
 
         statusItem.menu = menu
         updateMenuTitles()
+        refreshLaunchAtLoginState()
     }
 
     private func makeSliderView() -> NSView {
@@ -114,6 +126,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let i = NSMenuItem(title: title, action: action, keyEquivalent: "")
         i.target = self
         return i
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        refreshLaunchAtLoginState()
     }
 
     private func updateMenuTitles() {
@@ -185,6 +201,55 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func quit() {
         hotkey.unregister()
         NSApplication.shared.terminate(nil)
+    }
+
+    // MARK: - Launch at Login
+
+    /// Reflects the current SMAppService state in the menu checkmark.
+    private func refreshLaunchAtLoginState() {
+        launchAtLoginItem.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled {
+                try service.unregister()
+                writeLog("[UA Commander] Launch at Login disabled")
+            } else {
+                try service.register()
+                writeLog("[UA Commander] Launch at Login enabled")
+            }
+        } catch {
+            writeLog("[UA Commander] Launch at Login toggle failed: \(error)")
+        }
+        refreshLaunchAtLoginState()
+    }
+
+    /// Pre-1.x installs registered a hand-written LaunchAgent that ran the bare
+    /// binary. Now that we ship a real .app with SMAppService, remove the stale
+    /// agent so the two mechanisms don't launch two copies.
+    private func migrateLegacyLaunchAgent() {
+        let label = "com.kalskiid.uacommander"
+        let plist = (NSHomeDirectory() as NSString)
+            .appendingPathComponent("Library/LaunchAgents/\(label).plist")
+        guard FileManager.default.fileExists(atPath: plist) else { return }
+
+        let uid = String(getuid())
+        runLaunchctl(["bootout", "gui/\(uid)/\(label)"])
+        runLaunchctl(["unload", plist])
+        try? FileManager.default.removeItem(atPath: plist)
+        writeLog("[UA Commander] Removed legacy LaunchAgent — using SMAppService now")
+    }
+
+    private func runLaunchctl(_ args: [String]) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        task.arguments = args
+        task.standardOutput = nil
+        task.standardError = nil
+        try? task.run()
+        task.waitUntilExit()
     }
 
     // MARK: - Hotkeys

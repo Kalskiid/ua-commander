@@ -21,19 +21,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build release binary
-        run: swift build -c release
-
-      - name: Package
-        run: |
-          mkdir dist
-          cp .build/release/ua-commander dist/
-          cp install.sh uninstall.sh dist/
-          cd dist && zip -r \
-            ../ua-commander-${{ github.ref_name }}-${{ matrix.arch }}.zip .
+      - name: Build signed .app + DMG
+        run: VERSION="${GITHUB_REF_NAME#v}" scripts/make-dmg.sh
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: ua-commander-*.zip
+          files: dist/UA-Commander-*.dmg
           generate_release_notes: true
